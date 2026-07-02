@@ -1,10 +1,3 @@
-/*
-This file is part of Telegram Desktop,
-the official desktop application for the Telegram messaging service.
-
-For license and copyright information please follow this link:
-https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
-*/
 #pragma once
 
 #include "export/output/export_output_abstract.h"
@@ -76,7 +69,6 @@ private:
 	Environment _environment;
 	Stats *_stats = nullptr;
 
-	// Per-dialog state.
 	std::optional<zlib::FileToWrite> _zip;
 	bool _zipChatEntryOpen = false;
 	Data::DialogInfo _dialog;
