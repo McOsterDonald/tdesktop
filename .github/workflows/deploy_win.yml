@@ -54,6 +54,15 @@ jobs:
           git config --global user.email "you@example.com"
           git config --global user.name "Sample"
 
+      - name: Install Visual Studio Build Tools
+        shell: pwsh
+        run: |
+          Write-Host "Installing VS 2026 Build Tools..."
+          choco install visualstudio2026buildtools `
+            --package-parameters "--add Microsoft.VisualStudio.Workload.VCTools --add Microsoft.VisualStudio.Component.VC.ATL --add Microsoft.VisualStudio.Component.VC.14.44.17.14.ATL --add Microsoft.VisualStudio.Component.VC.14.44.17.14.x86.x64 --add Microsoft.VisualStudio.Component.VC.14.44.17.14.CLI.Support --includeRecommended --quiet" `
+            -y --ignore-package-exit-codes=3010
+          Write-Host "VS 2026 Build Tools installation completed"
+
       - uses: Eden-CI/msvc-dev-cmd@1bd71f95d6f3d1b2b3395b335cc63bcdc90cf223
         name: Native Tools Command Prompt.
         with:
@@ -137,6 +146,15 @@ jobs:
           DOCPATH=$TBUILD/$REPO_NAME/docs/building-win.md
           SDK="$(grep "SDK version" $DOCPATH | sed -r 's/.*\*\*(.*)\*\* SDK version.*/\1/')"
           echo "SDK=$SDK" >> $GITHUB_ENV
+
+      - name: Install Visual Studio Build Tools
+        shell: pwsh
+        run: |
+          Write-Host "Installing VS 2026 Build Tools..."
+          choco install visualstudio2026buildtools `
+            --package-parameters "--add Microsoft.VisualStudio.Workload.VCTools --add Microsoft.VisualStudio.Component.VC.ATL --add Microsoft.VisualStudio.Component.VC.14.44.17.14.ATL --add Microsoft.VisualStudio.Component.VC.14.44.17.14.x86.x64 --add Microsoft.VisualStudio.Component.VC.14.44.17.14.CLI.Support --includeRecommended --quiet" `
+            -y --ignore-package-exit-codes=3010
+          Write-Host "VS 2026 Build Tools installation completed"
 
       - uses: Eden-CI/msvc-dev-cmd@1bd71f95d6f3d1b2b3395b335cc63bcdc90cf223
         name: Native Tools Command Prompt.
