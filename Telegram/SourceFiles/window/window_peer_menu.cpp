@@ -2071,7 +2071,7 @@ void ImportUploadFile(
 	const auto fileId = base::RandomValue<int64>();
 	const int totalParts = std::max(
 		1,
-		(data.size() + kImportPartSize - 1) / kImportPartSize);
+		int((data.size() + kImportPartSize - 1) / kImportPartSize));
 
 	struct PartCtx {
 		int sent = 0;
