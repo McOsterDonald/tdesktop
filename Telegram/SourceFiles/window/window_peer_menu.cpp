@@ -2179,7 +2179,10 @@ void StartWhatsAppImport(
 	const auto utf = zipPath.toUtf8();
 	const auto zf = unzOpen(utf.constData());
 	if (!zf) {
-		Ui::Toast::Show(u"Cannot open ZIP: "_q + zipPath);
+		Ui::Toast::Show(tr::lng_whatsapp_import_cannot_open_zip(
+			tr::now,
+			lt_path,
+			zipPath));
 		return;
 	}
 	const auto closeGuard = gsl::finally([&] { unzClose(zf); });
@@ -2188,7 +2191,7 @@ void StartWhatsAppImport(
 	auto media = std::vector<ImportState::Entry>();
 
 	if (unzGoToFirstFile(zf) != UNZ_OK) {
-		Ui::Toast::Show(u"ZIP is empty"_q);
+		Ui::Toast::Show(tr::lng_whatsapp_import_zip_empty(tr::now));
 		return;
 	}
 	do {
@@ -2215,7 +2218,7 @@ void StartWhatsAppImport(
 	} while (unzGoToNextFile(zf) == UNZ_OK);
 
 	if (chatTxt.isEmpty()) {
-		Ui::Toast::Show(u"_chat.txt not found in ZIP"_q);
+		Ui::Toast::Show(tr::lng_whatsapp_import_chat_not_found(tr::now));
 		return;
 	}
 
@@ -2226,7 +2229,7 @@ void StartWhatsAppImport(
 
 	const auto chatTxtEntry = std::make_shared<QByteArray>(std::move(chatTxt));
 
-	Ui::Toast::Show(u"Import: uploading chat text..."_q);
+	Ui::Toast::Show(tr::lng_whatsapp_import_uploading_chat(tr::now));
 
 	ImportUploadFile(st, *chatTxtEntry, u"_chat.txt"_q,
 	[=](MTPInputFile uploaded) {
@@ -2239,20 +2242,30 @@ void StartWhatsAppImport(
 				[](const MTPDmessages_historyImport &d) {
 					return d.vid().v;
 				});
-			Ui::Toast::Show(
-				u"Import: uploading %1 media file(s)..."_q
-					.arg(st->media.size()));
+			Ui::Toast::Show(tr::lng_whatsapp_import_uploading_media(
+				tr::now,
+				lt_count,
+				st->media.size()));
 			ImportUploadNextMedia(st, [=] {
-				Ui::Toast::Show(u"Import complete!"_q);
+				Ui::Toast::Show(tr::lng_whatsapp_import_complete(tr::now));
 			}, [=](const QString &err) {
-				Ui::Toast::Show(u"Import error: "_q + err);
+				Ui::Toast::Show(tr::lng_whatsapp_import_error(
+					tr::now,
+					lt_text,
+					err));
 			});
 		}).fail([=](const MTP::Error &err) {
-			Ui::Toast::Show(u"initHistoryImport: "_q + err.type());
+			Ui::Toast::Show(tr::lng_whatsapp_import_init_error(
+				tr::now,
+				lt_text,
+				err.type()));
 		}).send();
 	},
 	[=](const QString &err) {
-		Ui::Toast::Show(u"Upload error: "_q + err);
+		Ui::Toast::Show(tr::lng_whatsapp_import_upload_error(
+			tr::now,
+			lt_text,
+			err));
 	});
 }
 
