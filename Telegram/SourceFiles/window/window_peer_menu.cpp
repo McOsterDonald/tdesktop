@@ -969,7 +969,7 @@ void Filler::addImportChat() {
 	const auto peer = _peer;
 	const auto navigation = _controller;
 	_addAction(
-		u"Import WhatsApp chat..."_q,
+		tr::lng_profile_import_chat(tr::now),
 		[=] { PeerMenuImportChat(navigation, peer); },
 		&st::menuIconExport);
 }

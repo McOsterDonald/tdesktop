@@ -172,6 +172,9 @@ namespace PTG
         {"lng_settings_review_manage", "Настроить вручную"},
         {"lng_settings_review_session_country", "Сессия из {country}"},
         {"lng_settings_manage_sessions", "Управление сессиями"},
+        {"lng_profile_import_chat", "Импортировать чат WhatsApp..."},
+        {"lng_export_option_whatsapp", "Стиль WhatsApp"},
+        {"lng_export_option_html_and_json", "HTML и JSON"},
         {0, nullptr}
     };
     static_assert(LangRuTranslation[sizeof(LangRuTranslation) / sizeof(LangRecord) - 1].key == 0);
@@ -342,6 +345,9 @@ namespace PTG
         {"lng_settings_review_manage", "Наладзіць уручную"},
         {"lng_settings_review_session_country", "Сесія з {country}"},
         {"lng_settings_manage_sessions", "Кіраванне сесіямі"},
+        {"lng_profile_import_chat", "Імпартаваць чат WhatsApp..."},
+        {"lng_export_option_whatsapp", "Стыль WhatsApp"},
+        {"lng_export_option_html_and_json", "HTML і JSON"},
         {0, nullptr}
     };
     static_assert(LangByTranslation[sizeof(LangByTranslation) / sizeof(LangRecord) - 1].key == 0);
@@ -512,6 +518,7 @@ namespace PTG
         {"lng_settings_review_manage", "Zarządzaj ręcznie"},
         {"lng_settings_review_session_country", "Sesja z {country}"},
         {"lng_settings_manage_sessions", "Zarządzanie sesjami"},
+        {"lng_export_option_html_and_json", "HTML i JSON"},
         {0, nullptr}
     };
     static_assert(LangPlTranslation[sizeof(LangPlTranslation) / sizeof(LangRecord) - 1].key == 0);
