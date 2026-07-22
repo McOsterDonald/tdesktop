@@ -2187,8 +2187,7 @@ void StartWhatsAppImport(
 	}
 	const auto closeGuard = gsl::finally([&] { unzClose(zf); });
 
-	QByteArray chatTxt;
-	auto media = std::vector<ImportState::Entry>();
+	auto entries = std::vector<ImportState::Entry>();
 
 	if (unzGoToFirstFile(zf) != UNZ_OK) {
 		Ui::Toast::Show(tr::lng_whatsapp_import_zip_empty(tr::now));
@@ -2209,17 +2208,43 @@ void StartWhatsAppImport(
 		unzReadCurrentFile(zf, data.data(), data.size());
 		unzCloseCurrentFile(zf);
 
-		const auto name = QString::fromUtf8(nameBuf);
-		if (name == u"_chat.txt"_q) {
-			chatTxt = std::move(data);
-		} else {
-			media.push_back({ name, std::move(data) });
-		}
+		entries.push_back({ QString::fromUtf8(nameBuf), std::move(data) });
 	} while (unzGoToNextFile(zf) == UNZ_OK);
 
-	if (chatTxt.isEmpty()) {
+	// WhatsApp names the chat text file "_chat.txt" on some exports and
+	// "<Chat Name>.txt" on others, so fall back to the only .txt entry
+	// when there is no file named exactly "_chat.txt".
+	auto chatIndex = -1;
+	for (auto i = 0; i != int(entries.size()); ++i) {
+		if (entries[i].name == u"_chat.txt"_q) {
+			chatIndex = i;
+			break;
+		}
+	}
+	if (chatIndex < 0) {
+		for (auto i = 0; i != int(entries.size()); ++i) {
+			if (!entries[i].name.endsWith(u".txt"_q, Qt::CaseInsensitive)) {
+				continue;
+			}
+			if (chatIndex >= 0) {
+				chatIndex = -1; // More than one .txt file, ambiguous.
+				break;
+			}
+			chatIndex = i;
+		}
+	}
+	if (chatIndex < 0) {
 		Ui::Toast::Show(tr::lng_whatsapp_import_chat_not_found(tr::now));
 		return;
+	}
+
+	auto chatTxt = std::move(entries[chatIndex].data);
+	auto media = std::vector<ImportState::Entry>();
+	media.reserve(entries.size() - 1);
+	for (auto i = 0; i != int(entries.size()); ++i) {
+		if (i != chatIndex) {
+			media.push_back(std::move(entries[i]));
+		}
 	}
 
 	const auto st = std::make_shared<ImportState>();
