@@ -2211,9 +2211,6 @@ void StartWhatsAppImport(
 		entries.push_back({ QString::fromUtf8(nameBuf), std::move(data) });
 	} while (unzGoToNextFile(zf) == UNZ_OK);
 
-	// WhatsApp names the chat text file "_chat.txt" on some exports and
-	// "<Chat Name>.txt" on others, so fall back to the only .txt entry
-	// when there is no file named exactly "_chat.txt".
 	auto chatIndex = -1;
 	for (auto i = 0; i != int(entries.size()); ++i) {
 		if (entries[i].name == u"_chat.txt"_q) {
