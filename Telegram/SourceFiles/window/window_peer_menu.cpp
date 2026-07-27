@@ -2224,7 +2224,7 @@ void StartWhatsAppImport(
 				continue;
 			}
 			if (chatIndex >= 0) {
-				chatIndex = -1; // More than one .txt file, ambiguous.
+				chatIndex = -1;
 				break;
 			}
 			chatIndex = i;
