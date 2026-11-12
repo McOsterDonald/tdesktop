@@ -2458,8 +2458,9 @@ void ImportFileUpload::sendPart(int index) {
 			MTPInputDocument());
 	}
 	using Flag = MTPDinputMediaUploadedDocument::Flag;
+	const auto forceFile = isImage || name.startsWith(u"DOC-"_q);
 	return MTP_inputMediaUploadedDocument(
-		MTP_flags(isImage ? Flag::f_force_file : Flag()),
+		MTP_flags(forceFile ? Flag::f_force_file : Flag()),
 		uploaded,
 		MTPInputFile(),
 		MTP_string(mime.isDefault()
