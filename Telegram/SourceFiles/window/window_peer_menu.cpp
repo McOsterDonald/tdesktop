@@ -128,6 +128,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 
 #include <QtCore/QFile>
 #include <QtCore/QFileInfo>
+#include <QtCore/QMimeDatabase>
 #include "boxes/peers/edit_participants_box.h"
 #include "boxes/peers/edit_peer_info_box.h"
 #include "boxes/peers/manage_community_box.h"
@@ -2263,6 +2264,7 @@ constexpr int kImportPartSize = 512 * 1024;
 constexpr auto kImportMaxEntries = 100000;
 constexpr auto kImportMaxFileNameSize = 4096;
 constexpr auto kImportMaxFileSize = uint64(512) * 1024 * 1024;
+constexpr auto kImportFinalizeDelay = crl::time(1500);
 
 class ZipArchive final {
 public:
@@ -2436,6 +2438,42 @@ void ImportFileUpload::sendPart(int index) {
 	}).toDC(MTP::uploadDcId(0)).send();
 }
 
+[[nodiscard]] MTPInputMedia ImportInputMedia(
+		const QString &name,
+		const MTPInputFile &uploaded) {
+	const auto mime = QMimeDatabase().mimeTypeForFile(
+		name,
+		QMimeDatabase::MatchExtension);
+	const auto mimeName = mime.name();
+	const auto isImage = mimeName.startsWith(u"image/"_q);
+	const auto isPhoto = isImage
+		&& name.startsWith(u"IMG-"_q)
+		&& (mimeName == u"image/jpeg"_q || mimeName == u"image/png"_q);
+	if (isPhoto) {
+		return MTP_inputMediaUploadedPhoto(
+			MTP_flags(0),
+			uploaded,
+			MTP_vector<MTPInputDocument>(0),
+			MTP_int(0),
+			MTPInputDocument());
+	}
+	using Flag = MTPDinputMediaUploadedDocument::Flag;
+	return MTP_inputMediaUploadedDocument(
+		MTP_flags(isImage ? Flag::f_force_file : Flag()),
+		uploaded,
+		MTPInputFile(),
+		MTP_string(mime.isDefault()
+			? u"application/octet-stream"_q
+			: mimeName),
+		MTP_vector<MTPDocumentAttribute>(
+			1,
+			MTP_documentAttributeFilename(MTP_string(name))),
+		MTP_vector<MTPInputDocument>(0),
+		MTPInputPhoto(),
+		MTP_int(0),
+		MTP_int(0));
+}
+
 void ImportUploadFile(
 		std::shared_ptr<ImportState> st,
 		QByteArray data,
@@ -2490,18 +2528,7 @@ void ImportUploadNextMedia(
 	}
 	ImportUploadFile(st, std::move(*data), name,
 	[=](MTPInputFile uploaded) {
-		const auto media = MTP_inputMediaUploadedDocument(
-			MTP_flags(0),
-			uploaded,
-			MTPInputFile(),
-			MTP_string(u"application/octet-stream"_q),
-			MTP_vector<MTPDocumentAttribute>(
-				1,
-				MTP_documentAttributeFilename(MTP_string(name))),
-			MTP_vector<MTPInputDocument>(0),
-			MTPInputPhoto(),
-			MTP_int(0),
-			MTP_int(0));
+		const auto media = ImportInputMedia(name, uploaded);
 
 		const auto session = st->session.get();
 		if (!session) {
@@ -2514,7 +2541,13 @@ void ImportUploadNextMedia(
 			media
 		)).done([=](const MTPMessageMedia &) {
 			++st->mediaIndex;
-			ImportUploadNextMedia(st, done, fail);
+			if (st->mediaIndex >= st->media.size()) {
+				base::call_delayed(kImportFinalizeDelay, [=] {
+					ImportUploadNextMedia(st, done, fail);
+				});
+			} else {
+				ImportUploadNextMedia(st, done, fail);
+			}
 		}).fail([=](const MTP::Error &err) {
 			fail(u"uploadImportedMedia for %1: "_q.arg(name) + err.type());
 		}).send();
