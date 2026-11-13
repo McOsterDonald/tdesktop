@@ -2614,7 +2614,39 @@ void ImportFileUpload::sendPart(int index) {
 			MTPInputDocument());
 	}
 	using Flag = MTPDinputMediaUploadedDocument::Flag;
-	const auto forceFile = isImage || name.startsWith(u"DOC-"_q);
+	if (name.startsWith(u"STK-"_q)
+		&& (mimeName == u"video/webm"_q)) {
+		return MTP_inputMediaUploadedDocument(
+			MTP_flags(0),
+			uploaded,
+			MTPInputFile(),
+			MTP_string(mimeName),
+			MTP_vector<MTPDocumentAttribute>(QVector<MTPDocumentAttribute>{
+				MTP_documentAttributeFilename(MTP_string(name)),
+				MTP_documentAttributeVideo(
+					MTP_flags(MTPDdocumentAttributeVideo::Flag::f_nosound),
+					MTP_double(3.),
+					MTP_int(512),
+					MTP_int(512),
+					MTPint(),
+					MTPdouble(),
+					MTPstring()),
+				MTP_documentAttributeSticker(
+					MTP_flags(0),
+					MTP_string(),
+					MTP_inputStickerSetEmpty(),
+					MTPMaskCoords()),
+			}),
+			MTP_vector<MTPInputDocument>(0),
+			MTPInputPhoto(),
+			MTP_int(0),
+			MTP_int(0));
+	}
+	const auto isWebpSticker = name.startsWith(u"STK-"_q)
+		&& (mimeName == u"image/webp"_q);
+	const auto forceFile = (isImage && !isWebpSticker)
+		|| name.startsWith(u"DOC-"_q)
+		|| name.endsWith(u".tgs"_q, Qt::CaseInsensitive);
 	return MTP_inputMediaUploadedDocument(
 		MTP_flags(forceFile ? Flag::f_force_file : Flag()),
 		uploaded,
@@ -2665,7 +2697,7 @@ void ImportFinalize(
 		done();
 	}).fail([=](const MTP::Error &err) {
 		fail(ImportErrorText(err, st->toUser, u"startHistoryImport"_q));
-	}).send();
+	}).handleFloodErrors().send();
 }
 
 void ImportCheckFile(
@@ -2683,7 +2715,7 @@ void ImportCheckFile(
 		done();
 	}).fail([=](const MTP::Error &err) {
 		fail(ImportErrorText(err, st->toUser, u"checkHistoryImport"_q));
-	}).send();
+	}).handleFloodErrors().send();
 }
 
 void ImportCheckPeer(
@@ -2703,7 +2735,7 @@ void ImportCheckPeer(
 			err,
 			st->toUser,
 			u"checkHistoryImportPeer"_q));
-	}).send();
+	}).handleFloodErrors().send();
 }
 
 void ImportUploadNextMedia(
@@ -2759,7 +2791,7 @@ void ImportUploadNextMedia(
 			next();
 		}).fail([=](const MTP::Error &err) {
 			failed(err, u"uploadImportedMedia for %1"_q.arg(name));
-		}).send();
+		}).handleFloodErrors().send();
 	}, [=](const MTP::Error &err) {
 		failed(err, u"upload of %1"_q.arg(name));
 	});
@@ -2863,7 +2895,7 @@ void StartWhatsAppImport(
 					err,
 					st->toUser,
 					u"initHistoryImport"_q));
-			}).send();
+			}).handleFloodErrors().send();
 		}, [=](const MTP::Error &err) {
 			ShowImportError(ImportErrorText(
 				err,
