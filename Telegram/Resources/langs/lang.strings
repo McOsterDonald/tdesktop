@@ -1989,6 +1989,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_whatsapp_import_error_wait#other" = "An import into this chat is still in progress. Try again in {count} minutes.";
 "lng_whatsapp_import_error_basic_group" = "Upgrade this group to a supergroup before importing messages into it.";
 "lng_whatsapp_import_error_running" = "An import into this chat is already running.";
+"lng_whatsapp_import_json_account" = "This JSON file contains an export of the whole account. Export a single chat and try again.";
+"lng_whatsapp_import_json_invalid" = "Could not read chat messages from this JSON file.";
+"lng_whatsapp_import_json_too_big" = "This JSON export is too large to import.";
 "lng_profile_gift_premium" = "Gift Premium";
 "lng_media_selected_media#one" = "{count} Media";
 "lng_media_selected_media#other" = "{count} Media";

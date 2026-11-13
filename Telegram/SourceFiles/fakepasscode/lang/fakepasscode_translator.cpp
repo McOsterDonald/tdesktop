@@ -205,6 +205,9 @@ namespace PTG
         {"lng_whatsapp_import_error_wait#other", "Импорт в этот чат ещё не завершён. Повторите попытку через {count} минут."},
         {"lng_whatsapp_import_error_basic_group", "Чтобы импортировать сообщения, сначала преобразуйте эту группу в супергруппу."},
         {"lng_whatsapp_import_error_running", "Импорт в этот чат уже выполняется."},
+        {"lng_whatsapp_import_json_account", "Этот JSON-файл содержит экспорт всего аккаунта. Экспортируйте один чат и попробуйте снова."},
+        {"lng_whatsapp_import_json_invalid", "Не удалось прочитать сообщения чата из этого JSON-файла."},
+        {"lng_whatsapp_import_json_too_big", "Этот JSON-экспорт слишком большой для импорта."},
         {0, nullptr}
     };
     static_assert(LangRuTranslation[sizeof(LangRuTranslation) / sizeof(LangRecord) - 1].key == 0);
@@ -408,6 +411,9 @@ namespace PTG
         {"lng_whatsapp_import_error_wait#other", "Імпарт у гэты чат яшчэ не завершаны. Паўтарыце спробу праз {count} хвілін."},
         {"lng_whatsapp_import_error_basic_group", "Каб імпартаваць паведамленні, спачатку пераўтварыце гэтую групу ў супергрупу."},
         {"lng_whatsapp_import_error_running", "Імпарт у гэты чат ужо выконваецца."},
+        {"lng_whatsapp_import_json_account", "Гэты JSON-файл змяшчае экспарт усяго акаўнта. Экспартуйце адзін чат і паспрабуйце яшчэ раз."},
+        {"lng_whatsapp_import_json_invalid", "Не ўдалося прачытаць паведамленні чата з гэтага JSON-файла."},
+        {"lng_whatsapp_import_json_too_big", "Гэты JSON-экспарт занадта вялікі для імпарту."},
         {0, nullptr}
     };
     static_assert(LangByTranslation[sizeof(LangByTranslation) / sizeof(LangRecord) - 1].key == 0);
@@ -609,6 +615,9 @@ namespace PTG
         {"lng_whatsapp_import_error_wait#other", "Import do tego czatu jeszcze trwa. Spróbuj ponownie za {count} minut."},
         {"lng_whatsapp_import_error_basic_group", "Aby importować wiadomości, najpierw przekształć tę grupę w supergrupę."},
         {"lng_whatsapp_import_error_running", "Import do tego czatu już trwa."},
+        {"lng_whatsapp_import_json_account", "Ten plik JSON zawiera eksport całego konta. Wyeksportuj pojedynczy czat i spróbuj ponownie."},
+        {"lng_whatsapp_import_json_invalid", "Nie udało się odczytać wiadomości czatu z tego pliku JSON."},
+        {"lng_whatsapp_import_json_too_big", "Ten eksport JSON jest zbyt duży do zaimportowania."},
         {0, nullptr}
     };
     static_assert(LangPlTranslation[sizeof(LangPlTranslation) / sizeof(LangRecord) - 1].key == 0);

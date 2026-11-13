@@ -126,8 +126,12 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "export/export_manager.h"
 #include "minizip/unzip.h"
 
+#include <QtCore/QDateTime>
 #include <QtCore/QFile>
 #include <QtCore/QFileInfo>
+#include <QtCore/QJsonArray>
+#include <QtCore/QJsonDocument>
+#include <QtCore/QJsonObject>
 #include <QtCore/QMimeDatabase>
 #include <QtCore/QRegularExpression>
 #include "mtproto/mtproto_response.h"
@@ -2308,6 +2312,7 @@ struct ImportEntry {
 	QString name;
 	unz64_file_pos position = {};
 	int64 size = 0;
+	QString diskPath;
 };
 
 struct ZipScan {
@@ -2405,6 +2410,25 @@ struct ImportState {
 	const auto read = unzReadCurrentFile(zf, data.data(), data.size());
 	const auto closed = unzCloseCurrentFile(zf);
 	if (read != data.size() || closed != UNZ_OK) {
+		return std::nullopt;
+	}
+	return data;
+}
+
+[[nodiscard]] std::optional<QByteArray> ReadImportEntry(
+		ZipArchive *archive,
+		const ImportEntry &entry) {
+	if (entry.diskPath.isEmpty()) {
+		return archive
+			? ReadZipEntry(archive, entry)
+			: std::optional<QByteArray>();
+	}
+	auto file = QFile(entry.diskPath);
+	if (!file.open(QIODevice::ReadOnly)) {
+		return std::nullopt;
+	}
+	auto data = file.readAll();
+	if (data.isEmpty()) {
 		return std::nullopt;
 	}
 	return data;
@@ -2748,8 +2772,9 @@ void ImportUploadNextMedia(
 	}
 	const auto &entry = st->media[st->mediaIndex];
 	const auto name = entry.name;
-	auto data = ReadZipEntry(st->archive.get(), entry);
-	if (!data) {
+	const auto fromDisk = !entry.diskPath.isEmpty();
+	auto data = ReadImportEntry(st->archive.get(), entry);
+	if (!data && !fromDisk) {
 		fail(tr::lng_whatsapp_import_zip_damaged(tr::now));
 		return;
 	}
@@ -2774,6 +2799,12 @@ void ImportUploadNextMedia(
 			fail(ImportErrorText(err, st->toUser, step));
 		}
 	};
+	if (!data) {
+		FAKE_LOG(("WhatsApp import: cannot read %1").arg(entry.diskPath));
+		++st->skipped;
+		next();
+		return;
+	}
 	ImportUploadFile(st, std::move(*data), name,
 	[=](MTPInputFile uploaded) {
 		const auto media = ImportInputMedia(name, uploaded);
@@ -2797,11 +2828,224 @@ void ImportUploadNextMedia(
 	});
 }
 
+void StartPreparedImport(
+	not_null<PeerData*> peer,
+	std::shared_ptr<ZipArchive> archive,
+	QByteArray chat,
+	std::vector<ImportEntry> media);
+
+enum class JsonImportError {
+	None,
+	Invalid,
+	Account,
+	TooBig,
+};
+
+struct JsonConversion {
+	QByteArray chat;
+	std::vector<ImportEntry> media;
+	JsonImportError error = JsonImportError::None;
+};
+
+[[nodiscard]] QString JsonText(const QJsonValue &value) {
+	if (value.isString()) {
+		return value.toString();
+	}
+	auto result = QString();
+	if (value.isArray()) {
+		for (const auto &part : value.toArray()) {
+			if (part.isString()) {
+				result += part.toString();
+			} else if (part.isObject()) {
+				result += part.toObject().value(u"text"_q).toString();
+			}
+		}
+	}
+	return result;
+}
+
+[[nodiscard]] QDateTime JsonDate(const QJsonObject &message) {
+	auto result = QDateTime::fromString(
+		message.value(u"date"_q).toString(),
+		Qt::ISODate);
+	if (!result.isValid()) {
+		const auto unixtime = message.value(u"date_unixtime"_q)
+			.toString()
+			.toLongLong();
+		if (unixtime) {
+			result = QDateTime::fromSecsSinceEpoch(unixtime);
+		}
+	}
+	return result;
+}
+
+[[nodiscard]] QString JsonMediaPrefix(
+		const QJsonObject &message,
+		bool isPhoto) {
+	if (isPhoto) {
+		return u"IMG"_q;
+	}
+	const auto type = message.value(u"media_type"_q).toString();
+	if (type == u"sticker"_q) {
+		return u"STK"_q;
+	} else if (type == u"voice_message"_q) {
+		return u"PTT"_q;
+	} else if (type == u"audio_file"_q) {
+		return u"AUD"_q;
+	} else if (type == u"video_file"_q
+		|| type == u"video_message"_q
+		|| type == u"animation"_q) {
+		return u"VID"_q;
+	}
+	return u"DOC"_q;
+}
+
+[[nodiscard]] JsonConversion ConvertTelegramJson(const QString &path) {
+	auto result = JsonConversion();
+	auto file = QFile(path);
+	if (!file.open(QIODevice::ReadOnly)) {
+		result.error = JsonImportError::Invalid;
+		return result;
+	} else if (uint64(file.size()) > kImportMaxFileSize) {
+		result.error = JsonImportError::TooBig;
+		return result;
+	}
+	auto parseError = QJsonParseError();
+	const auto document = QJsonDocument::fromJson(
+		file.readAll(),
+		&parseError);
+	if (parseError.error != QJsonParseError::NoError
+		|| !document.isObject()) {
+		result.error = JsonImportError::Invalid;
+		return result;
+	}
+	const auto root = document.object();
+	if (!root.value(u"messages"_q).isArray()) {
+		result.error = (root.contains(u"chats"_q)
+			|| root.contains(u"personal_information"_q))
+			? JsonImportError::Account
+			: JsonImportError::Invalid;
+		return result;
+	}
+
+	auto folder = QFileInfo(path).absoluteDir().canonicalPath();
+	if (!folder.endsWith('/')) {
+		folder += '/';
+	}
+	auto counter = 0;
+	for (const auto &value : root.value(u"messages"_q).toArray()) {
+		if (!value.isObject()) {
+			continue;
+		}
+		const auto message = value.toObject();
+		if (message.value(u"type"_q).toString() != u"message"_q) {
+			continue;
+		}
+		const auto date = JsonDate(message);
+		if (!date.isValid()) {
+			continue;
+		}
+		auto text = JsonText(message.value(u"text"_q));
+		text.remove('\r');
+
+		const auto isPhoto = message.value(u"photo"_q).isString();
+		const auto relative = message.value(
+			isPhoto ? u"photo"_q : u"file"_q).toString();
+		auto diskPath = QString();
+		auto size = int64(0);
+		if (!relative.isEmpty() && !relative.startsWith('(')) {
+			const auto info = QFileInfo(folder + relative);
+			const auto canonical = info.canonicalFilePath();
+			if (info.isFile()
+				&& !canonical.isEmpty()
+				&& canonical.startsWith(folder)
+				&& info.size() > 0
+				&& uint64(info.size()) <= kImportMaxFileSize) {
+				diskPath = canonical;
+				size = info.size();
+			}
+		}
+		if (diskPath.isEmpty() && text.isEmpty()) {
+			continue;
+		}
+
+		auto sender = message.value(u"from"_q).toString();
+		if (sender.isEmpty()) {
+			sender = message.value(u"from_id"_q).toString();
+		}
+		if (sender.isEmpty()) {
+			sender = u"Unknown"_q;
+		}
+		sender.replace('\n', ' ');
+
+		auto line = date.toString(u"dd.MM.yyyy, HH:mm"_q)
+			+ u" - "_q
+			+ sender
+			+ u": "_q;
+		if (!diskPath.isEmpty()) {
+			if (int(result.media.size()) >= kImportMaxEntries) {
+				result.error = JsonImportError::TooBig;
+				return result;
+			}
+			const auto suffix = QFileInfo(diskPath).suffix();
+			const auto name = QString("%1-%2-WA%3"
+			).arg(JsonMediaPrefix(message, isPhoto)
+			).arg(date.toString(u"yyyyMMdd"_q)
+			).arg(++counter, 4, 10, QChar('0'))
+				+ (suffix.isEmpty() ? QString() : (QChar('.') + suffix));
+			result.media.push_back({
+				.name = name,
+				.size = size,
+				.diskPath = diskPath,
+			});
+			line += name + u" (file attached)"_q;
+			if (!text.isEmpty()) {
+				line += '\n' + text;
+			}
+		} else {
+			line += text;
+		}
+		result.chat.append(line.toUtf8()).append('\n');
+	}
+	if (result.chat.isEmpty()) {
+		result.error = JsonImportError::Invalid;
+	}
+	return result;
+}
+
+void StartTelegramJsonImport(
+		not_null<PeerData*> peer,
+		const QString &jsonPath) {
+	auto converted = ConvertTelegramJson(jsonPath);
+	switch (converted.error) {
+	case JsonImportError::Account:
+		ShowImportError(tr::lng_whatsapp_import_json_account(tr::now));
+		return;
+	case JsonImportError::TooBig:
+		ShowImportError(tr::lng_whatsapp_import_json_too_big(tr::now));
+		return;
+	case JsonImportError::Invalid:
+		ShowImportError(tr::lng_whatsapp_import_json_invalid(tr::now));
+		return;
+	case JsonImportError::None:
+		break;
+	}
+	StartPreparedImport(
+		peer,
+		nullptr,
+		std::move(converted.chat),
+		std::move(converted.media));
+}
+
 void StartWhatsAppImport(
 		not_null<PeerData*> peer,
 		const QString &zipPath) {
 	if (const auto error = ImportUnavailableText(peer); !error.isEmpty()) {
 		ShowImportError(error);
+		return;
+	}
+	if (zipPath.endsWith(u".json"_q, Qt::CaseInsensitive)) {
+		StartTelegramJsonImport(peer, zipPath);
 		return;
 	}
 	const auto utf = zipPath.toUtf8();
@@ -2845,15 +3089,26 @@ void StartWhatsAppImport(
 		}
 	}
 
+	StartPreparedImport(
+		peer,
+		archive,
+		std::move(*chatTxt),
+		std::move(media));
+}
+
+void StartPreparedImport(
+		not_null<PeerData*> peer,
+		std::shared_ptr<ZipArchive> archive,
+		QByteArray chat,
+		std::vector<ImportEntry> media) {
 	const auto st = std::make_shared<ImportState>(
 		ImportKey(peer->session().uniqueId(), peer->id));
 	st->session = base::make_weak(&peer->session());
-	st->archive = archive;
+	st->archive = std::move(archive);
 	st->inputPeer = peer->input();
 	st->toUser = peer->isUser();
 	st->media = std::move(media);
 
-	const auto chat = std::move(*chatTxt);
 	const auto upload = [=] {
 		Ui::Toast::Show(tr::lng_whatsapp_import_uploading_chat(tr::now));
 
@@ -2935,8 +3190,8 @@ void PeerMenuImportChat(
 		}
 		FileDialog::GetOpenPath(
 			QPointer<QWidget>(strong->widget().get()),
-			u"Choose WhatsApp ZIP export"_q,
-			u"ZIP files (*.zip)"_q,
+			u"Choose WhatsApp ZIP or Telegram JSON export"_q,
+			u"Chat exports (*.zip *.json)"_q,
 			[=](const FileDialog::OpenResult &result) {
 				const auto strong = weak.get();
 				if (!strong || result.paths.isEmpty()) {
