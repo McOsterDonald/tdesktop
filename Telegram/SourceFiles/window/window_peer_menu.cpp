@@ -129,6 +129,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <QtCore/QFile>
 #include <QtCore/QFileInfo>
 #include <QtCore/QMimeDatabase>
+#include <QtCore/QRegularExpression>
+#include "mtproto/mtproto_response.h"
+#include "storage/file_upload.h"
 #include "boxes/peers/edit_participants_box.h"
 #include "boxes/peers/edit_peer_info_box.h"
 #include "boxes/peers/manage_community_box.h"
@@ -1094,6 +1097,14 @@ void Filler::addImportChat() {
 		return;
 	}
 	const auto peer = _peer;
+	const auto user = peer->asUser();
+	const auto allowed = user
+		? (!user->isSelf() && !user->isBot() && !user->isServiceUser())
+		: (peer->isChat()
+			|| (peer->isMegagroup() && !peer->isMonoforum()));
+	if (!allowed) {
+		return;
+	}
 	const auto navigation = _controller;
 	_addAction(
 		tr::lng_profile_import_chat(tr::now),
@@ -2265,6 +2276,13 @@ constexpr auto kImportMaxEntries = 100000;
 constexpr auto kImportMaxFileNameSize = 4096;
 constexpr auto kImportMaxFileSize = uint64(512) * 1024 * 1024;
 constexpr auto kImportFinalizeDelay = crl::time(1500);
+constexpr auto kImportHeadLines = 100;
+constexpr auto kImportHeadMaxSize = 64 * 1024;
+constexpr auto kImportErrorDuration = crl::time(5000);
+
+using ImportKey = std::pair<uint64, PeerId>;
+
+auto ActiveImports = base::flat_set<ImportKey>();
 
 class ZipArchive final {
 public:
@@ -2298,10 +2316,23 @@ struct ZipScan {
 };
 
 struct ImportState {
+	explicit ImportState(ImportKey key)
+	: key(key) {
+		ActiveImports.emplace(key);
+	}
+	ImportState(const ImportState &other) = delete;
+	ImportState &operator=(const ImportState &other) = delete;
+	~ImportState() {
+		ActiveImports.remove(key);
+	}
+
+	const ImportKey key;
 	base::weak_ptr<Main::Session> session;
 	std::shared_ptr<ZipArchive> archive;
 	MTPInputPeer inputPeer;
+	bool toUser = false;
 	int64 importId = 0;
+	int skipped = 0;
 	std::vector<ImportEntry> media;
 	size_t mediaIndex = 0;
 };
@@ -2322,7 +2353,8 @@ struct ImportState {
 				0,
 				nullptr,
 				0) != UNZ_OK
-			|| int64(info.size_filename) > kImportMaxFileNameSize) {
+			|| int64(info.size_filename) > kImportMaxFileNameSize
+			|| !info.uncompressed_size) {
 			continue;
 		} else if (uint64(info.uncompressed_size) > kImportMaxFileSize
 			|| int(result.entries.size()) >= kImportMaxEntries) {
@@ -2345,7 +2377,16 @@ struct ImportState {
 			continue;
 		}
 		unzCloseCurrentFile(zf);
-		entry.name = QString::fromUtf8(name.data(), int(info.size_filename));
+		const auto path = QString::fromUtf8(
+			name.data(),
+			int(info.size_filename));
+		if (path.startsWith(u"__MACOSX/"_q)) {
+			continue;
+		}
+		entry.name = path.mid(path.lastIndexOf('/') + 1);
+		if (entry.name.isEmpty()) {
+			continue;
+		}
 		result.entries.push_back(std::move(entry));
 	} while (unzGoToNextFile(zf) == UNZ_OK);
 	return result;
@@ -2369,6 +2410,103 @@ struct ImportState {
 	return data;
 }
 
+[[nodiscard]] QString ImportUnavailableText(not_null<PeerData*> peer) {
+	const auto key = ImportKey(peer->session().uniqueId(), peer->id);
+	return peer->isChat()
+		? tr::lng_whatsapp_import_error_basic_group(tr::now)
+		: ActiveImports.contains(key)
+		? tr::lng_whatsapp_import_error_running(tr::now)
+		: QString();
+}
+
+[[nodiscard]] QString ImportErrorText(
+		const MTP::Error &error,
+		bool toUser,
+		const QString &step) {
+	const auto &type = error.type();
+	FAKE_LOG(("WhatsApp import: %1 failed: %2").arg(step, type));
+	const auto wait = QRegularExpression(
+		u"^PREVIOUS_CHAT_IMPORT_ACTIVE_WAIT_(\\d+)MIN$"_q).match(type);
+	if (wait.hasMatch()) {
+		return tr::lng_whatsapp_import_error_wait(
+			tr::now,
+			lt_count,
+			wait.captured(1).toInt());
+	} else if (MTP::IgnoreError(error)) {
+		return QString();
+	} else if (type == u"USER_NOT_MUTUAL_CONTACT"_q) {
+		return tr::lng_whatsapp_import_error_mutual(tr::now);
+	} else if (type == u"CHAT_ADMIN_REQUIRED"_q) {
+		return tr::lng_whatsapp_import_error_not_admin(tr::now);
+	} else if (type == u"PEER_ID_INVALID"_q
+		|| type == u"USER_IS_BLOCKED"_q) {
+		return tr::lng_whatsapp_import_error_peer(tr::now);
+	} else if (type == u"IMPORT_PEER_TYPE_INVALID"_q) {
+		return toUser
+			? tr::lng_whatsapp_import_error_type_user(tr::now)
+			: tr::lng_whatsapp_import_error_type_group(tr::now);
+	} else if (type == u"IMPORT_LANG_NOT_FOUND"_q) {
+		return tr::lng_whatsapp_import_error_lang(tr::now);
+	} else if (type.startsWith(u"IMPORT_FORMAT_"_q)
+		|| type == u"IMPORT_FILE_INVALID"_q) {
+		return tr::lng_whatsapp_import_error_format(tr::now);
+	} else if (type == u"IMPORT_ID_INVALID"_q) {
+		return tr::lng_whatsapp_import_error_expired(tr::now);
+	}
+	return tr::lng_whatsapp_import_error(
+		tr::now,
+		lt_text,
+		step + u": "_q + type);
+}
+
+[[nodiscard]] bool ImportErrorSkippable(const MTP::Error &error) {
+	const auto &type = error.type();
+	return (error.code() == 400)
+		&& (type != u"IMPORT_ID_INVALID"_q)
+		&& (type != u"CHAT_ADMIN_REQUIRED"_q)
+		&& (type != u"USER_NOT_MUTUAL_CONTACT"_q)
+		&& (type != u"PEER_ID_INVALID"_q)
+		&& (type != u"USER_IS_BLOCKED"_q);
+}
+
+void ShowImportError(const QString &text) {
+	if (text.isEmpty()) {
+		return;
+	}
+	Ui::Toast::Show({
+		.text = { text },
+		.duration = kImportErrorDuration,
+	});
+}
+
+[[nodiscard]] QString ImportHead(const QByteArray &chat) {
+	const auto text = QString::fromUtf8(chat.left(kImportHeadMaxSize));
+	auto till = 0;
+	for (auto i = 0; i != kImportHeadLines; ++i) {
+		const auto next = text.indexOf('\n', till);
+		if (next < 0) {
+			return text;
+		}
+		till = next + 1;
+	}
+	return text.left(till);
+}
+
+[[nodiscard]] int FindChatEntry(const std::vector<ImportEntry> &entries) {
+	const auto media = QRegularExpression(u"^[A-Z]{3}-\\d{8}-WA\\d+\\."_q);
+	auto result = -1;
+	for (auto i = 0; i != int(entries.size()); ++i) {
+		const auto &name = entries[i].name;
+		if (name == u"_chat.txt"_q) {
+			return i;
+		} else if (name.endsWith(u".txt"_q, Qt::CaseInsensitive)
+			&& !media.match(name).hasMatch()) {
+			result = (result == -1) ? i : -2;
+		}
+	}
+	return result;
+}
+
 class ImportFileUpload final
 	: public std::enable_shared_from_this<ImportFileUpload> {
 public:
@@ -2377,7 +2515,7 @@ public:
 		QByteArray data,
 		QString name,
 		Fn<void(MTPInputFile)> done,
-		Fn<void(QString)> fail);
+		Fn<void(MTP::Error)> fail);
 
 	void sendPart(int index);
 
@@ -2386,9 +2524,10 @@ private:
 	const QByteArray _data;
 	const QString _name;
 	const Fn<void(MTPInputFile)> _done;
-	const Fn<void(QString)> _fail;
+	const Fn<void(MTP::Error)> _fail;
 	const int64 _fileId = 0;
 	const int _total = 0;
+	const bool _big = false;
 
 };
 
@@ -2397,7 +2536,7 @@ ImportFileUpload::ImportFileUpload(
 	QByteArray data,
 	QString name,
 	Fn<void(MTPInputFile)> done,
-	Fn<void(QString)> fail)
+	Fn<void(MTP::Error)> fail)
 : _state(std::move(state))
 , _data(std::move(data))
 , _name(std::move(name))
@@ -2406,7 +2545,8 @@ ImportFileUpload::ImportFileUpload(
 , _fileId(base::RandomValue<int64>())
 , _total(std::max(
 	1,
-	int((_data.size() + kImportPartSize - 1) / kImportPartSize))) {
+	int((_data.size() + kImportPartSize - 1) / kImportPartSize)))
+, _big(_data.size() > Storage::kUseBigFilesFrom) {
 }
 
 void ImportFileUpload::sendPart(int index) {
@@ -2419,13 +2559,14 @@ void ImportFileUpload::sendPart(int index) {
 		_data.constData() + offset,
 		std::min(kImportPartSize, int(_data.size()) - offset));
 	const auto self = shared_from_this();
-	session->api().request(MTPupload_SaveFilePart(
-		MTP_long(_fileId),
-		MTP_int(index),
-		MTP_bytes(chunk)
-	)).done([=](const MTPBool &) {
+	const auto done = [=](const MTPBool &) {
 		if (index + 1 < self->_total) {
 			self->sendPart(index + 1);
+		} else if (self->_big) {
+			self->_done(MTP_inputFileBig(
+				MTP_long(self->_fileId),
+				MTP_int(self->_total),
+				MTP_string(self->_name)));
 		} else {
 			self->_done(MTP_inputFile(
 				MTP_long(self->_fileId),
@@ -2433,9 +2574,24 @@ void ImportFileUpload::sendPart(int index) {
 				MTP_string(self->_name),
 				MTP_string(QString())));
 		}
-	}).fail([=](const MTP::Error &err) {
-		self->_fail(u"upload: "_q + err.type());
-	}).toDC(MTP::uploadDcId(0)).send();
+	};
+	const auto fail = [=](const MTP::Error &err) {
+		self->_fail(err);
+	};
+	if (_big) {
+		session->api().request(MTPupload_SaveBigFilePart(
+			MTP_long(_fileId),
+			MTP_int(index),
+			MTP_int(_total),
+			MTP_bytes(chunk)
+		)).done(done).fail(fail).toDC(MTP::uploadDcId(0)).send();
+	} else {
+		session->api().request(MTPupload_SaveFilePart(
+			MTP_long(_fileId),
+			MTP_int(index),
+			MTP_bytes(chunk)
+		)).done(done).fail(fail).toDC(MTP::uploadDcId(0)).send();
+	}
 }
 
 [[nodiscard]] MTPInputMedia ImportInputMedia(
@@ -2480,7 +2636,7 @@ void ImportUploadFile(
 		QByteArray data,
 		const QString &name,
 		Fn<void(MTPInputFile)> done,
-		Fn<void(QString)> fail) {
+		Fn<void(MTP::Error)> fail) {
 	std::make_shared<ImportFileUpload>(
 		std::move(st),
 		std::move(data),
@@ -2508,7 +2664,45 @@ void ImportFinalize(
 	)).done([=](const MTPBool &) {
 		done();
 	}).fail([=](const MTP::Error &err) {
-		fail(u"startHistoryImport: "_q + err.type());
+		fail(ImportErrorText(err, st->toUser, u"startHistoryImport"_q));
+	}).send();
+}
+
+void ImportCheckFile(
+		std::shared_ptr<ImportState> st,
+		const QString &head,
+		Fn<void()> done,
+		Fn<void(QString)> fail) {
+	const auto session = st->session.get();
+	if (!session) {
+		return;
+	}
+	session->api().request(MTPmessages_CheckHistoryImport(
+		MTP_string(head)
+	)).done([=](const MTPmessages_HistoryImportParsed &) {
+		done();
+	}).fail([=](const MTP::Error &err) {
+		fail(ImportErrorText(err, st->toUser, u"checkHistoryImport"_q));
+	}).send();
+}
+
+void ImportCheckPeer(
+		std::shared_ptr<ImportState> st,
+		Fn<void()> done,
+		Fn<void(QString)> fail) {
+	const auto session = st->session.get();
+	if (!session) {
+		return;
+	}
+	session->api().request(MTPmessages_CheckHistoryImportPeer(
+		st->inputPeer
+	)).done([=](const MTPmessages_CheckedHistoryImportPeer &) {
+		done();
+	}).fail([=](const MTP::Error &err) {
+		fail(ImportErrorText(
+			err,
+			st->toUser,
+			u"checkHistoryImportPeer"_q));
 	}).send();
 }
 
@@ -2527,6 +2721,27 @@ void ImportUploadNextMedia(
 		fail(tr::lng_whatsapp_import_zip_damaged(tr::now));
 		return;
 	}
+	const auto next = [=] {
+		++st->mediaIndex;
+		if (st->mediaIndex >= st->media.size()) {
+			base::call_delayed(kImportFinalizeDelay, [=] {
+				ImportUploadNextMedia(st, done, fail);
+			});
+		} else {
+			ImportUploadNextMedia(st, done, fail);
+		}
+	};
+	const auto failed = [=](const MTP::Error &err, const QString &step) {
+		if (ImportErrorSkippable(err)) {
+			FAKE_LOG(("WhatsApp import: %1 skipped: %2").arg(
+				step,
+				err.type()));
+			++st->skipped;
+			next();
+		} else {
+			fail(ImportErrorText(err, st->toUser, step));
+		}
+	};
 	ImportUploadFile(st, std::move(*data), name,
 	[=](MTPInputFile uploaded) {
 		const auto media = ImportInputMedia(name, uploaded);
@@ -2541,23 +2756,22 @@ void ImportUploadNextMedia(
 			MTP_string(name),
 			media
 		)).done([=](const MTPMessageMedia &) {
-			++st->mediaIndex;
-			if (st->mediaIndex >= st->media.size()) {
-				base::call_delayed(kImportFinalizeDelay, [=] {
-					ImportUploadNextMedia(st, done, fail);
-				});
-			} else {
-				ImportUploadNextMedia(st, done, fail);
-			}
+			next();
 		}).fail([=](const MTP::Error &err) {
-			fail(u"uploadImportedMedia for %1: "_q.arg(name) + err.type());
+			failed(err, u"uploadImportedMedia for %1"_q.arg(name));
 		}).send();
-	}, fail);
+	}, [=](const MTP::Error &err) {
+		failed(err, u"upload of %1"_q.arg(name));
+	});
 }
 
 void StartWhatsAppImport(
 		not_null<PeerData*> peer,
 		const QString &zipPath) {
+	if (const auto error = ImportUnavailableText(peer); !error.isEmpty()) {
+		ShowImportError(error);
+		return;
+	}
 	const auto utf = zipPath.toUtf8();
 	const auto zf = unzOpen64(utf.constData());
 	if (!zf) {
@@ -2580,25 +2794,7 @@ void StartWhatsAppImport(
 		return;
 	}
 
-	auto chatIndex = -1;
-	for (auto i = 0; i != int(entries.size()); ++i) {
-		if (entries[i].name == u"_chat.txt"_q) {
-			chatIndex = i;
-			break;
-		}
-	}
-	if (chatIndex < 0) {
-		for (auto i = 0; i != int(entries.size()); ++i) {
-			if (!entries[i].name.endsWith(u".txt"_q, Qt::CaseInsensitive)) {
-				continue;
-			}
-			if (chatIndex >= 0) {
-				chatIndex = -1;
-				break;
-			}
-			chatIndex = i;
-		}
-	}
+	const auto chatIndex = FindChatEntry(entries);
 	if (chatIndex < 0) {
 		Ui::Toast::Show(tr::lng_whatsapp_import_chat_not_found(tr::now));
 		return;
@@ -2617,54 +2813,67 @@ void StartWhatsAppImport(
 		}
 	}
 
-	const auto st = std::make_shared<ImportState>();
+	const auto st = std::make_shared<ImportState>(
+		ImportKey(peer->session().uniqueId(), peer->id));
 	st->session = base::make_weak(&peer->session());
 	st->archive = archive;
 	st->inputPeer = peer->input();
+	st->toUser = peer->isUser();
 	st->media = std::move(media);
 
-	Ui::Toast::Show(tr::lng_whatsapp_import_uploading_chat(tr::now));
+	const auto chat = std::move(*chatTxt);
+	const auto upload = [=] {
+		Ui::Toast::Show(tr::lng_whatsapp_import_uploading_chat(tr::now));
 
-	ImportUploadFile(st, std::move(*chatTxt), u"_chat.txt"_q,
-	[=](MTPInputFile uploaded) {
-		const auto session = st->session.get();
-		if (!session) {
-			return;
-		}
-		session->api().request(MTPmessages_InitHistoryImport(
-			st->inputPeer,
-			uploaded,
-			MTP_int(int(st->media.size()))
-		)).done([=](const MTPmessages_HistoryImport &result) {
-			st->importId = result.match(
-				[](const MTPDmessages_historyImport &d) {
-					return d.vid().v;
-				});
-			Ui::Toast::Show(tr::lng_whatsapp_import_uploading_media(
-				tr::now,
-				lt_count,
-				st->media.size()));
-			ImportUploadNextMedia(st, [=] {
-				Ui::Toast::Show(tr::lng_whatsapp_import_complete(tr::now));
-			}, [=](const QString &err) {
-				Ui::Toast::Show(tr::lng_whatsapp_import_error(
+		ImportUploadFile(st, chat, u"_chat.txt"_q,
+		[=](MTPInputFile uploaded) {
+			const auto session = st->session.get();
+			if (!session) {
+				return;
+			}
+			session->api().request(MTPmessages_InitHistoryImport(
+				st->inputPeer,
+				uploaded,
+				MTP_int(int(st->media.size()))
+			)).done([=](const MTPmessages_HistoryImport &result) {
+				st->importId = result.match(
+					[](const MTPDmessages_historyImport &d) {
+						return d.vid().v;
+					});
+				Ui::Toast::Show(tr::lng_whatsapp_import_uploading_media(
 					tr::now,
-					lt_text,
-					err));
-			});
-		}).fail([=](const MTP::Error &err) {
-			Ui::Toast::Show(tr::lng_whatsapp_import_init_error(
-				tr::now,
-				lt_text,
-				err.type()));
-		}).send();
-	},
-	[=](const QString &err) {
-		Ui::Toast::Show(tr::lng_whatsapp_import_upload_error(
-			tr::now,
-			lt_text,
-			err));
-	});
+					lt_count,
+					st->media.size()));
+				ImportUploadNextMedia(st, [=] {
+					if (!st->skipped) {
+						Ui::Toast::Show(
+							tr::lng_whatsapp_import_complete(tr::now));
+						return;
+					}
+					Ui::Toast::Show({
+						.text = { tr::lng_whatsapp_import_complete_skipped(
+							tr::now,
+							lt_count,
+							st->skipped) },
+						.duration = kImportErrorDuration,
+					});
+				}, ShowImportError);
+			}).fail([=](const MTP::Error &err) {
+				ShowImportError(ImportErrorText(
+					err,
+					st->toUser,
+					u"initHistoryImport"_q));
+			}).send();
+		}, [=](const MTP::Error &err) {
+			ShowImportError(ImportErrorText(
+				err,
+				st->toUser,
+				u"upload of chat text"_q));
+		});
+	};
+	ImportCheckFile(st, ImportHead(chat), [=] {
+		ImportCheckPeer(st, upload, ShowImportError);
+	}, ShowImportError);
 }
 
 } // namespace
@@ -2685,6 +2894,11 @@ void PeerMenuImportChat(
 	base::call_delayed(st::defaultPopupMenu.showDuration, [=] {
 		const auto strong = weak.get();
 		if (!strong) {
+			return;
+		}
+		const auto error = ImportUnavailableText(peer);
+		if (!error.isEmpty()) {
+			ShowImportError(error);
 			return;
 		}
 		FileDialog::GetOpenPath(
