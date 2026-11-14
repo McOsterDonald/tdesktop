@@ -208,6 +208,11 @@ namespace PTG
         {"lng_whatsapp_import_json_account", "Этот JSON-файл содержит экспорт всего аккаунта. Экспортируйте один чат и попробуйте снова."},
         {"lng_whatsapp_import_json_invalid", "Не удалось прочитать сообщения чата из этого JSON-файла."},
         {"lng_whatsapp_import_json_too_big", "Этот JSON-экспорт слишком большой для импорта."},
+        {"lng_whatsapp_import_progress_title", "Импорт чата"},
+        {"lng_whatsapp_import_progress_bytes", "Загружено {done} из {total}"},
+        {"lng_whatsapp_import_progress_speed", "{speed}/с, осталось примерно {time}"},
+        {"lng_whatsapp_import_progress_finishing", "Завершение импорта..."},
+        {"lng_whatsapp_import_cancelled", "Импорт отменён."},
         {0, nullptr}
     };
     static_assert(LangRuTranslation[sizeof(LangRuTranslation) / sizeof(LangRecord) - 1].key == 0);
@@ -414,6 +419,11 @@ namespace PTG
         {"lng_whatsapp_import_json_account", "Гэты JSON-файл змяшчае экспарт усяго акаўнта. Экспартуйце адзін чат і паспрабуйце яшчэ раз."},
         {"lng_whatsapp_import_json_invalid", "Не ўдалося прачытаць паведамленні чата з гэтага JSON-файла."},
         {"lng_whatsapp_import_json_too_big", "Гэты JSON-экспарт занадта вялікі для імпарту."},
+        {"lng_whatsapp_import_progress_title", "Імпарт чата"},
+        {"lng_whatsapp_import_progress_bytes", "Загружана {done} з {total}"},
+        {"lng_whatsapp_import_progress_speed", "{speed}/с, засталося прыкладна {time}"},
+        {"lng_whatsapp_import_progress_finishing", "Завяршэнне імпарту..."},
+        {"lng_whatsapp_import_cancelled", "Імпарт скасаваны."},
         {0, nullptr}
     };
     static_assert(LangByTranslation[sizeof(LangByTranslation) / sizeof(LangRecord) - 1].key == 0);
@@ -618,6 +628,11 @@ namespace PTG
         {"lng_whatsapp_import_json_account", "Ten plik JSON zawiera eksport całego konta. Wyeksportuj pojedynczy czat i spróbuj ponownie."},
         {"lng_whatsapp_import_json_invalid", "Nie udało się odczytać wiadomości czatu z tego pliku JSON."},
         {"lng_whatsapp_import_json_too_big", "Ten eksport JSON jest zbyt duży do zaimportowania."},
+        {"lng_whatsapp_import_progress_title", "Importowanie czatu"},
+        {"lng_whatsapp_import_progress_bytes", "Przesłano {done} z {total}"},
+        {"lng_whatsapp_import_progress_speed", "{speed}/s, pozostało około {time}"},
+        {"lng_whatsapp_import_progress_finishing", "Kończenie importu..."},
+        {"lng_whatsapp_import_cancelled", "Import anulowany."},
         {0, nullptr}
     };
     static_assert(LangPlTranslation[sizeof(LangPlTranslation) / sizeof(LangRecord) - 1].key == 0);

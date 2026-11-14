@@ -1992,6 +1992,11 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 "lng_whatsapp_import_json_account" = "This JSON file contains an export of the whole account. Export a single chat and try again.";
 "lng_whatsapp_import_json_invalid" = "Could not read chat messages from this JSON file.";
 "lng_whatsapp_import_json_too_big" = "This JSON export is too large to import.";
+"lng_whatsapp_import_progress_title" = "Importing chat";
+"lng_whatsapp_import_progress_bytes" = "Uploaded {done} of {total}";
+"lng_whatsapp_import_progress_speed" = "{speed}/s, about {time} left";
+"lng_whatsapp_import_progress_finishing" = "Finishing the import...";
+"lng_whatsapp_import_cancelled" = "Import cancelled.";
 "lng_profile_gift_premium" = "Gift Premium";
 "lng_media_selected_media#one" = "{count} Media";
 "lng_media_selected_media#other" = "{count} Media";

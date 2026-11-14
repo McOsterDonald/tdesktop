@@ -55,6 +55,9 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include "ui/text/text_utilities.h"
 #include "ui/widgets/chat_filters_tabs_strip.h"
 #include "ui/widgets/labels.h"
+#include "base/timer.h"
+#include "ui/painter.h"
+#include "ui/rp_widget.h"
 #include "ui/widgets/checkbox.h"
 #include "ui/widgets/popup_menu.h"
 #include "ui/widgets/menu/menu_add_action_callback_factory.h"
@@ -2340,6 +2343,11 @@ struct ImportState {
 	int skipped = 0;
 	std::vector<ImportEntry> media;
 	size_t mediaIndex = 0;
+	int64 totalBytes = 0;
+	int64 doneBytes = 0;
+	int64 currentBytes = 0;
+	bool cancelled = false;
+	base::weak_qptr<Ui::BoxContent> box;
 };
 
 [[nodiscard]] ZipScan ScanZipEntries(unzFile zf) {
@@ -2575,7 +2583,7 @@ ImportFileUpload::ImportFileUpload(
 
 void ImportFileUpload::sendPart(int index) {
 	const auto session = _state->session.get();
-	if (!session) {
+	if (!session || _state->cancelled) {
 		return;
 	}
 	const auto offset = index * kImportPartSize;
@@ -2583,7 +2591,9 @@ void ImportFileUpload::sendPart(int index) {
 		_data.constData() + offset,
 		std::min(kImportPartSize, int(_data.size()) - offset));
 	const auto self = shared_from_this();
+	const auto chunkSize = int(chunk.size());
 	const auto done = [=](const MTPBool &) {
+		self->_state->currentBytes += chunkSize;
 		if (index + 1 < self->_total) {
 			self->sendPart(index + 1);
 		} else if (self->_big) {
@@ -2766,7 +2776,9 @@ void ImportUploadNextMedia(
 		std::shared_ptr<ImportState> st,
 		Fn<void()> done,
 		Fn<void(QString)> fail) {
-	if (st->mediaIndex >= st->media.size()) {
+	if (st->cancelled) {
+		return;
+	} else if (st->mediaIndex >= st->media.size()) {
 		ImportFinalize(st, done, fail);
 		return;
 	}
@@ -2778,7 +2790,10 @@ void ImportUploadNextMedia(
 		fail(tr::lng_whatsapp_import_zip_damaged(tr::now));
 		return;
 	}
+	const auto entrySize = entry.size;
 	const auto next = [=] {
+		st->doneBytes += entrySize;
+		st->currentBytes = 0;
 		++st->mediaIndex;
 		if (st->mediaIndex >= st->media.size()) {
 			base::call_delayed(kImportFinalizeDelay, [=] {
@@ -3096,6 +3111,124 @@ void StartWhatsAppImport(
 		std::move(media));
 }
 
+void ShowImportProgressBox(
+		not_null<PeerData*> peer,
+		std::shared_ptr<ImportState> st) {
+	const auto window = peer->session().tryResolveWindow();
+	if (!window) {
+		return;
+	}
+	const auto weak = std::weak_ptr<ImportState>(st);
+	st->box = window->show(Box([=](not_null<Ui::GenericBox*> box) {
+		box->setTitle(rpl::single(
+			tr::lng_whatsapp_import_progress_title(tr::now)));
+		box->setCloseByEscape(false);
+		box->setCloseByOutsideClick(false);
+
+		struct Progress {
+			rpl::variable<QString> bytes;
+			rpl::variable<QString> speed;
+			float64 ratio = 0.;
+			float64 smoothed = 0.;
+			int64 lastBytes = 0;
+			crl::time lastTime = 0;
+			base::Timer timer;
+		};
+		const auto progress = box->lifetime().make_state<Progress>();
+		progress->lastTime = crl::now();
+
+		box->addRow(
+			object_ptr<Ui::FlatLabel>(
+				box,
+				progress->bytes.value(),
+				st::boxLabel),
+			st::boxRowPadding);
+		const auto bar = box->addRow(
+			object_ptr<Ui::RpWidget>(box),
+			st::boxRowPadding + QMargins(0, st::boxLittleSkip, 0, 0));
+		bar->resize(bar->width(), st::lineWidth * 6);
+		box->addRow(
+			object_ptr<Ui::FlatLabel>(
+				box,
+				progress->speed.value(),
+				st::boxDividerLabel),
+			st::boxRowPadding + QMargins(0, st::boxLittleSkip, 0, 0));
+
+		bar->paintRequest() | rpl::on_next([=] {
+			auto p = QPainter(bar);
+			auto hq = PainterHighQualityEnabler(p);
+			const auto radius = bar->height() / 2.;
+			p.setPen(Qt::NoPen);
+			p.setBrush(st::windowBgOver);
+			p.drawRoundedRect(bar->rect(), radius, radius);
+			const auto width = int(base::SafeRound(
+				bar->width() * progress->ratio));
+			if (width > 0) {
+				p.setBrush(st::windowBgActive);
+				p.drawRoundedRect(
+					QRect(0, 0, std::max(width, bar->height()), bar->height()),
+					radius,
+					radius);
+			}
+		}, bar->lifetime());
+
+		const auto update = [=] {
+			const auto strong = weak.lock();
+			if (!strong) {
+				return;
+			}
+			const auto total = std::max(strong->totalBytes, int64(1));
+			const auto done = std::min(
+				strong->doneBytes + strong->currentBytes,
+				total);
+			progress->ratio = float64(done) / total;
+			const auto now = crl::now();
+			if (now - progress->lastTime >= 1000) {
+				const auto instant = float64(done - progress->lastBytes)
+					* 1000. / (now - progress->lastTime);
+				progress->smoothed = progress->smoothed
+					? (progress->smoothed * 0.7 + instant * 0.3)
+					: instant;
+				progress->lastBytes = done;
+				progress->lastTime = now;
+			}
+			progress->bytes = tr::lng_whatsapp_import_progress_bytes(
+				tr::now,
+				lt_done,
+				Ui::FormatSizeText(done),
+				lt_total,
+				Ui::FormatSizeText(total));
+			if (done >= total) {
+				progress->speed = tr::lng_whatsapp_import_progress_finishing(
+					tr::now);
+			} else if (progress->smoothed >= 1.) {
+				const auto left = int64(
+					(total - done) / progress->smoothed) + 1;
+				progress->speed = tr::lng_whatsapp_import_progress_speed(
+					tr::now,
+					lt_speed,
+					Ui::FormatSizeText(int64(progress->smoothed)),
+					lt_time,
+					Ui::FormatDurationText(left));
+			} else {
+				progress->speed = QString();
+			}
+			bar->update();
+		};
+		progress->timer.setCallback(update);
+		progress->timer.callEach(250);
+		update();
+
+		box->addButton(tr::lng_cancel(), [=] {
+			if (const auto strong = weak.lock()) {
+				strong->cancelled = true;
+			}
+			box->closeBox();
+			Ui::Toast::Show(tr::lng_whatsapp_import_cancelled(tr::now));
+		});
+	}));
+}
+
 void StartPreparedImport(
 		not_null<PeerData*> peer,
 		std::shared_ptr<ZipArchive> archive,
@@ -3108,16 +3241,31 @@ void StartPreparedImport(
 	st->inputPeer = peer->input();
 	st->toUser = peer->isUser();
 	st->media = std::move(media);
+	st->totalBytes = int64(chat.size());
+	for (const auto &entry : st->media) {
+		st->totalBytes += entry.size;
+	}
 
+	const auto closeBox = [=] {
+		if (const auto box = st->box.get()) {
+			box->closeBox();
+		}
+	};
+	const auto fail = [=](const QString &text) {
+		closeBox();
+		ShowImportError(text);
+	};
 	const auto upload = [=] {
-		Ui::Toast::Show(tr::lng_whatsapp_import_uploading_chat(tr::now));
+		ShowImportProgressBox(peer, st);
 
 		ImportUploadFile(st, chat, u"_chat.txt"_q,
 		[=](MTPInputFile uploaded) {
 			const auto session = st->session.get();
-			if (!session) {
+			if (!session || st->cancelled) {
 				return;
 			}
+			st->doneBytes += int64(chat.size());
+			st->currentBytes = 0;
 			session->api().request(MTPmessages_InitHistoryImport(
 				st->inputPeer,
 				uploaded,
@@ -3127,11 +3275,8 @@ void StartPreparedImport(
 					[](const MTPDmessages_historyImport &d) {
 						return d.vid().v;
 					});
-				Ui::Toast::Show(tr::lng_whatsapp_import_uploading_media(
-					tr::now,
-					lt_count,
-					st->media.size()));
 				ImportUploadNextMedia(st, [=] {
+					closeBox();
 					if (!st->skipped) {
 						Ui::Toast::Show(
 							tr::lng_whatsapp_import_complete(tr::now));
@@ -3144,15 +3289,15 @@ void StartPreparedImport(
 							st->skipped) },
 						.duration = kImportErrorDuration,
 					});
-				}, ShowImportError);
+				}, fail);
 			}).fail([=](const MTP::Error &err) {
-				ShowImportError(ImportErrorText(
+				fail(ImportErrorText(
 					err,
 					st->toUser,
 					u"initHistoryImport"_q));
 			}).handleFloodErrors().send();
 		}, [=](const MTP::Error &err) {
-			ShowImportError(ImportErrorText(
+			fail(ImportErrorText(
 				err,
 				st->toUser,
 				u"upload of chat text"_q));
