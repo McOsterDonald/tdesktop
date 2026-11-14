@@ -2863,6 +2863,50 @@ struct JsonConversion {
 	JsonImportError error = JsonImportError::None;
 };
 
+[[nodiscard]] QString JsonWrapLine(const QString &line, const QString &mark) {
+	auto from = 0;
+	auto till = int(line.size());
+	while (from < till && (line[from] == ' ' || line[from] == '\t')) {
+		++from;
+	}
+	while (till > from && (line[till - 1] == ' ' || line[till - 1] == '\t')) {
+		--till;
+	}
+	if (from == till) {
+		return line;
+	}
+	return line.left(from)
+		+ mark
+		+ line.mid(from, till - from)
+		+ mark
+		+ line.mid(till);
+}
+
+[[nodiscard]] QString JsonWrapText(
+		const QString &text,
+		const QString &type) {
+	if (type == u"pre"_q) {
+		return u"```"_q + text + u"```"_q;
+	}
+	auto mark = QString();
+	if (type == u"bold"_q) {
+		mark = u"*"_q;
+	} else if (type == u"italic"_q) {
+		mark = u"_"_q;
+	} else if (type == u"strikethrough"_q) {
+		mark = u"~"_q;
+	} else if (type == u"code"_q) {
+		mark = u"`"_q;
+	} else {
+		return text;
+	}
+	auto lines = text.split('\n');
+	for (auto &line : lines) {
+		line = JsonWrapLine(line, mark);
+	}
+	return lines.join('\n');
+}
+
 [[nodiscard]] QString JsonText(const QJsonValue &value) {
 	if (value.isString()) {
 		return value.toString();
@@ -2873,7 +2917,10 @@ struct JsonConversion {
 			if (part.isString()) {
 				result += part.toString();
 			} else if (part.isObject()) {
-				result += part.toObject().value(u"text"_q).toString();
+				const auto object = part.toObject();
+				result += JsonWrapText(
+					object.value(u"text"_q).toString(),
+					object.value(u"type"_q).toString());
 			}
 		}
 	}

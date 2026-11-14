@@ -48,12 +48,57 @@ QString MediaPrefix(const Data::Message &message) {
 	return u"DOC"_q;
 }
 
+QByteArray WrapLine(const QByteArray &line, const QByteArray &mark) {
+	const auto size = int(line.size());
+	auto from = 0;
+	auto till = size;
+	while (from < till && (line[from] == ' ' || line[from] == '\t')) {
+		++from;
+	}
+	while (till > from && (line[till - 1] == ' ' || line[till - 1] == '\t')) {
+		--till;
+	}
+	if (from == till) {
+		return line;
+	}
+	return line.left(from)
+		+ mark
+		+ line.mid(from, till - from)
+		+ mark
+		+ line.mid(till);
+}
+
+QByteArray WrapText(const QByteArray &text, const QByteArray &mark) {
+	if (mark == "```") {
+		return mark + text + mark;
+	}
+	auto lines = text.split('\n');
+	for (auto &line : lines) {
+		line = WrapLine(line, mark);
+	}
+	return lines.join('\n');
+}
+
+QByteArray MarkFor(Data::TextPart::Type type) {
+	using Type = Data::TextPart::Type;
+	switch (type) {
+	case Type::Bold: return "*";
+	case Type::Italic: return "_";
+	case Type::Strike: return "~";
+	case Type::Code: return "`";
+	case Type::Pre: return "```";
+	default: return QByteArray();
+	}
+}
+
 QByteArray JoinText(const std::vector<Data::TextPart> &data) {
 	auto result = QByteArray();
 	for (const auto &part : data) {
-		result.append(part.text);
+		const auto text = QByteArray(part.text).replace('\r', "");
+		const auto mark = MarkFor(part.type);
+		result.append(mark.isEmpty() ? text : WrapText(text, mark));
 	}
-	return result.replace('\r', "");
+	return result;
 }
 
 QByteArray SenderName(
