@@ -139,6 +139,7 @@ https://github.com/telegramdesktop/tdesktop/blob/master/LEGAL
 #include <QtCore/QRegularExpression>
 #include "mtproto/mtproto_response.h"
 #include "storage/file_upload.h"
+#include "storage/localimageloader.h"
 #include "boxes/peers/edit_participants_box.h"
 #include "boxes/peers/edit_peer_info_box.h"
 #include "boxes/peers/manage_community_box.h"
@@ -2281,7 +2282,7 @@ void Filler::addSetPersonalChannel() {
 constexpr int kImportPartSize = 512 * 1024;
 constexpr auto kImportMaxEntries = 100000;
 constexpr auto kImportMaxFileNameSize = 4096;
-constexpr auto kImportMaxFileSize = uint64(512) * 1024 * 1024;
+constexpr auto kImportMaxFileSize = uint64(kFileSizeLimit);
 constexpr auto kImportFinalizeDelay = crl::time(1500);
 constexpr auto kImportHeadLines = 100;
 constexpr auto kImportHeadMaxSize = 64 * 1024;
