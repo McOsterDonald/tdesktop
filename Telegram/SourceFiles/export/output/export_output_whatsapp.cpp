@@ -1,6 +1,7 @@
 #include "export/output/export_output_whatsapp.h"
 
 #include "export/output/export_output_result.h"
+#include "export/output/export_output_stats.h"
 #include "export/data/export_data_types.h"
 
 #include <QtCore/QDateTime>
@@ -309,6 +310,9 @@ Result WhatsAppWriter::writeDialogSlice(const Data::MessagesSlice &data) {
 		return Result::Success();
 	}
 	_zip->writeInFile(block.constData(), block.size());
+	if (_stats) {
+		_stats->incrementBytes(block.size());
+	}
 	return (_zip->error() == ZIP_OK)
 		? Result::Success()
 		: Result(Result::Type::FatalError, _settings.path);
@@ -358,6 +362,9 @@ Result WhatsAppWriter::writeDialogEnd() {
 		return Result(Result::Type::FatalError, path);
 	}
 	_lastZipPath = path;
+	if (_stats) {
+		_stats->incrementFiles();
+	}
 
 	_zip.reset();
 	_pendingMedia.clear();
